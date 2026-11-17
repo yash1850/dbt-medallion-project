@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+dbt_project/target/
+dbt_project/logs/
+dbt_project/dbt_packages/
+
+logs/
+
+.env
+.env.*
+!.env.example
+
+profiles.yml

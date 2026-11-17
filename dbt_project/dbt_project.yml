@@ -1,0 +1,22 @@
+name: 'shop_analytics'
+version: '1.0.0'
+config-version: 2
+profile: 'shop_analytics'
+
+models:
+  shop_analytics:
+    bronze:
+      +schema: bronze
+      +materialized: view
+      +meta:
+        owner: 'ingestion team'
+    silver:
+      +schema: silver
+      +materialized: table
+      +meta:
+        owner: 'data quality team'
+    gold:
+      +schema: gold
+      +materialized: table
+      +meta:
+        owner: 'analytics team'
