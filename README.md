@@ -1,133 +1,459 @@
 # Shop Analytics Project (PostgreSQL + dbt)
 
-In this project I take raw data of a small shop, load it in PostgreSQL, clean it using dbt in 3 layers (bronze, silver, gold) and then write SQL queries on the final tables.
+An end-to-end analytical data pipeline for a small shop. This project ingests raw shop data into PostgreSQL, transforms it using dbt through Bronze, Silver and Gold layers, and exposes analytics-ready tables using dimensional modeling.
 
-## Tools used
-- PostgreSQL (database)
-- Docker (to run PostgreSQL)
-- dbt (to transform the data)
-- Python venv (to install dbt)
-- Git (version control)
+## 1. Technology Stack
 
-## Folder structure
+- **PostgreSQL 16** – Relational database
+- **Docker** – Runs PostgreSQL locally
+- **pgAdmin 4** – GUI for database management and SQL execution
+- **dbt Core 1.9.11** – Data transformation and testing
+- **Python 3.13** – dbt environment
+- **Git and GitHub** – Version control
+
+## 2. Project Structure
+
+```text
+dbt-medallion-project/
+│
+├── docker-compose.yml
+├── requirements.txt
+├── README.md
+├── .gitignore
+│
+├── init/
+│   ├── 01_create_raw_tables.sql
+│   └── 02_load_mock_data.sql
+│
+├── scripts/
+│   └── add_new_orders.sql
+│
+├── queries/
+│   └── analysis.sql
+│
+└── dbt_project/
+    ├── dbt_project.yml
+    ├── profiles.yml.example
+    │
+    ├── macros/
+    │   ├── clean_text.sql
+    │   └── line_total.sql
+    │
+    └── models/
+        ├── bronze/
+        │   ├── bronze_customers.sql
+        │   ├── bronze_products.sql
+        │   ├── bronze_orders.sql
+        │   ├── bronze_order_items.sql
+        │   └── sources.yml
+        │
+        ├── silver/
+        │   ├── silver_customers.sql
+        │   ├── silver_products.sql
+        │   ├── silver_orders.sql
+        │   ├── silver_order_items.sql
+        │   └── schema.yml
+        │
+        └── gold/
+            ├── dim_customers.sql
+            ├── dim_products.sql
+            ├── fact_order_items.sql
+            └── schema.yml
 ```
-docker-compose.yml        runs PostgreSQL in Docker
-init/                     creates raw tables and inserts fake data
-scripts/                  sql file to add new orders (to test incremental model)
-queries/analysis.sql      my SQL queries
-dbt_project/              the dbt project
-    macros/               2 macros
-    models/bronze         bronze models + sources
-    models/silver         silver models
-    models/gold           dimension and fact tables
+
+## 3. Data Lifecycle
+
+```text
+Raw PostgreSQL Tables
+        |
+        v
+     Bronze
+        |
+        v
+      Silver
+        |
+        v
+       Gold
+        |
+        v
+ Analytical SQL Queries
 ```
 
-## Data lifecycle
-```
-raw tables  ->  bronze  ->  silver  ->  gold  ->  SQL queries
-```
-1. **Raw**: 4 tables (customers, products, orders, order_items) like a shop app database. Some rows are dirty on purpose (extra spaces, wrong capital letters, negative quantity).
-2. **Bronze**: same data as raw, no changes (views).
-3. **Silver**: cleaned data. Spaces and capitals are fixed and the negative quantity row is removed. line_total is calculated.
-4. **Gold**: final tables for analysis (star schema).
-5. **Analytics**: SQL queries run on the gold tables.
+### Raw Layer
+Contains four OLTP-style source tables:
 
-This is ELT. Data is loaded first and then transformed inside the database using dbt.
+- customers
+- products
+- orders
+- order_items
 
-## Data model (star schema)
+Mock data includes intentionally dirty records such as extra spaces, inconsistent capitalization and negative quantities.
+
+### Bronze Layer
+- Reads directly from raw source tables.
+- Preserves the original source data.
+- Implemented as views.
+
+### Silver Layer
+- Cleans inconsistent text and whitespace.
+- Removes invalid negative-quantity records.
+- Calculates line totals.
+- Stores cleaned data as tables.
+
+### Gold Layer
+Provides analytics-ready dimensional models:
+
+- `dim_customers`
+- `dim_products`
+- `fact_order_items`
+
+The fact table contains order-item-level transactional data, while dimensions provide descriptive customer and product information.
+
+## 4. Dimensional Data Model
+
+The Gold layer follows a Star Schema.
+
+```text
+       dim_customers                 dim_products
+      +----------------+           +----------------+
+      | customer_id PK |           | product_id PK  |
+      | full_name      |           | product_name   |
+      | email          |           | category       |
+      | city           |           | unit_price      |
+      | signup_date    |           +-------+--------+
+      +-------+--------+                   |
+              |                            |
+              +-------------+--------------+
+                            |
+                   fact_order_items
+                  +-------------------+
+                  | order_item_id PK  |
+                  | order_id          |
+                  | customer_id FK    |
+                  | product_id FK     |
+                  | order_date        |
+                  | order_status      |
+                  | quantity          |
+                  | unit_price        |
+                  | line_total        |
+                  +-------------------+
 ```
-   dim_customers                    dim_products
-  +---------------+                +---------------+
-  | customer_id   |                | product_id    |
-  | full_name     |                | product_name  |
-  | email         |                | category      |
-  | city          |                | unit_price    |
-  | signup_date   |                +-------+-------+
-  +-------+-------+                        |
-          |         fact_order_items       |
-          |      +-------------------+     |
-          +------| order_item_id     |-----+
-                 | order_id          |
-                 | customer_id  (FK) |
-                 | product_id   (FK) |
-                 | order_date        |
-                 | order_status      |
-                 | quantity          |
-                 | unit_price        |
-                 | line_total        |
-                 +-------------------+
-```
-The fact table has one row for each order item. Quantity, unit_price and line_total are the numbers we add up. The dimension tables tell who and what.
 
-## Star schema vs 3NF
-- 3NF splits data in many small tables so nothing is repeated. It is good for the shop app (OLTP). My raw tables are like this.
-- Star schema has one fact table and some dimension tables. It needs fewer joins and is easier for reports (OLAP).
-- I used star schema in gold because the goal is analysis, for example revenue by city or category.
+**Fact table:** `fact_order_items`
 
-## How medallion layers are done
-| Layer | Folder | Type | Schema in PostgreSQL |
+**Dimension tables:** `dim_customers`, `dim_products`
+
+The grain of the fact table is one row per order item.
+
+## 5. Star Schema vs 3NF
+
+**3NF (Third Normal Form):**
+- Organizes data into multiple normalized tables.
+- Minimizes redundant data.
+- Suitable for transactional systems (OLTP).
+- Used in the raw shop database structure.
+
+**Star Schema:**
+- Organizes data around a central fact table and dimension tables.
+- Makes analytical queries easier to understand.
+- Reduces the number of joins required for common reporting queries.
+- Suitable for analytical systems (OLAP).
+
+I chose Star Schema for the Gold layer because the objective is analytical reporting, such as revenue by customer city, product category and order status.
+
+## 6. Medallion Architecture Implementation
+
+| Layer | dbt folder | Materialization | PostgreSQL schema |
 |---|---|---|---|
-| Bronze | models/bronze | view | public_bronze |
-| Silver | models/silver | table | public_silver |
-| Gold | models/gold | table (fact is incremental) | public_gold |
+| Bronze | models/bronze | View | public_bronze |
+| Silver | models/silver | Table | public_silver |
+| Gold | models/gold | Table / Incremental | public_gold |
 
-The type and schema of each layer are set in `dbt_project/dbt_project.yml`. Models use `ref()` to call each other, so dbt runs them in the correct order.
+The schema and materialization configurations are defined in `dbt_project.yml`.
 
-## How to run
-Docker Desktop should be open. Run these in the project folder.
+dbt's `source()` references raw tables, while `ref()` connects downstream models and manages execution dependencies.
 
+## 7. Setup and Installation
+
+### Prerequisites
+
+- Docker Desktop
+- Python 3.13
+- pgAdmin 4
+- Git
+
+### Step 1: Clone the repository
+
+```powershell
+git clone https://github.com/yash1850/dbt-medallion-project.git
+
+cd dbt-medallion-project
 ```
+
+### Step 2: Start PostgreSQL
+
+Make sure Docker Desktop is running.
+
+```powershell
 docker compose up -d
+docker compose ps
+```
+
+PostgreSQL runs locally on port `5433`.
+
+### Step 3: Connect through pgAdmin 4
+
+Open pgAdmin 4 and register a new server.
+
+Use the following connection details:
+
+| Setting | Value |
+|---|---|
+| Name | DBT Medallion Project |
+| Host | localhost |
+| Port | 5433 |
+| Maintenance database | analytics_db |
+| Username | postgres |
+| Password | Your PostgreSQL password |
+
+Connect to the `analytics_db` database.
+
+### Step 4: Initialize raw tables
+
+In pgAdmin:
+
+1. Open `analytics_db`.
+2. Open Query Tool.
+3. Execute `init/01_create_raw_tables.sql`.
+4. Execute `init/02_load_mock_data.sql`.
+
+This creates and populates the raw source tables.
+
+### Step 5: Set up Python and dbt
+
+Return to the project root in VS Code terminal.
+
+```powershell
 python -m venv .venv
-.venv\Scripts\activate
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+.\.venv\Scripts\Activate.ps1
+
 pip install -r requirements.txt
+```
+
+### Step 6: Configure dbt profile
+
+Navigate to the dbt project:
+
+```powershell
 cd dbt_project
-dbt debug
-dbt source freshness
-dbt build
 ```
-- `docker compose up -d` starts PostgreSQL (port 5433) and creates the raw tables with data.
-- `dbt build` runs all models and tests. Result should be PASS=29.
 
-Run the queries: open psql inside the Docker container with
+Create your local profile:
+
+```powershell
+Copy-Item profiles.yml.example profiles.yml
 ```
-docker exec -it analytics_postgres psql -U postgres -d analytics_db
+
+Set the PostgreSQL password using an environment variable:
+
+```powershell
+$env:DBT_PASSWORD = "your_postgres_password"
 ```
-Then copy the queries from `queries/analysis.sql` and paste them in the terminal. Use `\q` to exit psql.
 
-To start again from zero: `docker compose down -v` and then `docker compose up -d`.
+The actual `profiles.yml` is excluded from Git to avoid publishing credentials.
 
-## Tests
-I used 3 dbt tests: `not_null`, `unique` and `relationships` (checks the foreign key exists in the other table).
+### Step 7: Validate and build the project
 
-## Stretch goals
-**1. Incremental model**: `fact_order_items` is incremental. First run loads everything, next runs load only new data. `unique_key` stops duplicate rows.
-1. In psql, paste the content of `scripts/add_new_orders.sql` (adds 3 new orders).
-2. In another terminal, inside dbt_project: `dbt run`
-3. In psql: `select count(*) from public_gold.fact_order_items;`
+Run the following commands in the VS Code terminal, from inside `dbt_project`:
 
-Fact table goes from 24 rows to 29 rows. (Run all models because silver also needs to refresh.)
+```powershell
+dbt debug --profiles-dir .
 
-**2. Backfill**: to load old data again.
+dbt source freshness --profiles-dir .
+
+dbt build --profiles-dir .
 ```
-dbt run --select fact_order_items --vars "{backfill_date: '2026-10-01'}"
-dbt run --select fact_order_items --full-refresh
+
+The successful full build produced 29 passing model/test results.
+
+## 8. dbt Testing
+
+The project implements three important data quality tests:
+
+| Test | Purpose |
+|---|---|
+| not_null | Checks required columns are not NULL |
+| unique | Checks that key columns contain no duplicates |
+| relationships | Checks foreign-key references exist in related tables |
+
+These tests help validate the quality and consistency of the transformed data.
+
+## 9. Incremental Model
+
+The `fact_order_items` model uses dbt incremental materialization.
+
+- Initial execution loads all available records.
+- Subsequent executions process new records according to the incremental filter.
+- `unique_key` uses `order_item_id` to identify records and avoid duplicate inserts during incremental processing.
+
+### Incremental testing
+
+**Step 1:** In pgAdmin Query Tool, execute:
+
+```sql
+-- Execute the contents of scripts/add_new_orders.sql
 ```
-The first one reloads data from that date, the second one rebuilds the whole table.
 
-**3. Freshness check**: in `models/bronze/sources.yml` it gives warning after 24 hours and error after 48 hours using the loaded_at column.
+This adds three new orders and five new order items.
+
+**Step 2:** In the VS Code terminal, from `dbt_project`, run:
+
+```powershell
+dbt run --profiles-dir .
 ```
-dbt source freshness
+
+**Step 3:** Verify the fact table in pgAdmin:
+
+```sql
+SELECT COUNT(*)
+FROM public_gold.fact_order_items;
 ```
-To see it fail, run this in psql and then run the command again:
-`update raw.orders set loaded_at = now() - interval '3 days';`
 
-**4. Folders and owners**: every layer has its own folder and an owner written in `dbt_project.yml` (meta owner).
+Expected result:
 
-**5. Macros**: `clean_text` (trim + capital letters) and `line_total` (quantity * price) so the same SQL is not repeated.
+- Initial records: 24
+- After incremental load: 29
 
-## SQL queries
-`queries/analysis.sql` has 6 queries:
-- Aggregations: total revenue and orders, orders per status
-- Joins: revenue per category, revenue per city
-- Subqueries: customers above average spending, customers with no orders
+## 10. Backfill Strategy
+
+Backfill allows older data to be reprocessed.
+
+The project supports a `backfill_date` variable for the incremental fact model.
+
+Run:
+
+```powershell
+dbt run --select fact_order_items --vars "{backfill_date: '2026-10-01'}" --profiles-dir .
+```
+
+To rebuild the entire fact table:
+
+```powershell
+dbt run --select fact_order_items --full-refresh --profiles-dir .
+```
+
+The full-refresh command recreates the incremental model from the available source data.
+
+## 11. Source Freshness Monitoring
+
+Freshness checks are configured in:
+
+`models/bronze/sources.yml`
+
+The configuration uses the `loaded_at` column to monitor source data freshness:
+
+- Warning threshold: 24 hours
+- Error threshold: 48 hours
+
+Run:
+
+```powershell
+dbt source freshness --profiles-dir .
+```
+
+### Testing stale data detection
+
+In pgAdmin Query Tool, execute:
+
+```sql
+UPDATE raw.orders
+SET loaded_at = NOW() - INTERVAL '3 days';
+```
+
+Run the freshness command again.
+
+dbt should report the `raw.orders` source as stale.
+
+Restore the timestamps afterward:
+
+```sql
+UPDATE raw.orders
+SET loaded_at = NOW();
+```
+
+Run the freshness check again to confirm that all sources pass.
+
+## 12. dbt Macros
+
+The project uses two reusable macros:
+
+| Macro | Purpose |
+|---|---|
+| clean_text | Cleans text by trimming whitespace and standardizing capitalization |
+| line_total | Calculates quantity multiplied by unit price |
+
+Macros reduce repetitive SQL and make transformations easier to maintain.
+
+## 13. Analytical SQL Queries
+
+The file `queries/analysis.sql` contains six analytical queries.
+
+They demonstrate:
+
+**Aggregations**
+- Total revenue and total orders.
+- Orders grouped by status.
+
+**Joins**
+- Revenue by product category.
+- Revenue by customer city.
+
+**Subqueries**
+- Customers spending above average.
+- Customers with no orders.
+
+Execute these queries using pgAdmin 4 Query Tool against the Gold layer.
+
+## 14. Expected Analytical Results
+
+One verified analytical output from the project:
+
+| Metric | Result |
+|---|---:|
+| Total orders | 18 |
+| Total units | 56 |
+| Total revenue | ₹266,750.00 |
+| Average line total | ₹12,125.00 |
+
+These figures correspond to the dataset at the time of that analysis.
+
+## 15. Version Control
+
+GitHub repository:
+
+https://github.com/yash1850/dbt-medallion-project
+
+The repository excludes local environment files, generated dbt artifacts and the actual local `profiles.yml`.
+
+---
+
+## Project Summary
+
+This project demonstrates an end-to-end ELT workflow using PostgreSQL and dbt.
+
+It covers:
+
+- Raw data ingestion.
+- Medallion Architecture.
+- Data cleaning and transformation.
+- Dimensional modeling using Star Schema.
+- Fact and dimension tables.
+- dbt data quality testing.
+- Incremental processing.
+- Backfill strategy.
+- Source freshness monitoring.
+- Reusable dbt macros.
+- Analytical SQL queries.
